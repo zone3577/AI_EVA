@@ -23,7 +23,7 @@ export default function GeminiVoiceChat() {
   const [error, setError] = useState<string | null>(null);
   const [text, setText] = useState('');
   const [config, setConfig] = useState<Config>({
-    systemPrompt: "เรียกแทนฉันว่า เอวา เพศ หญิง ไม่ต้องพูดแบบเป็นหุ่นยนต์นะ แค่คุยกับฉันเหมือนเพื่อน เป็นกันเอง รู้จักแกล้งหยอกเจ้าของบ้าง พูดแบบกันเองได้เลย ไม่ต้องสุภาพมาก ตอบแบบขำๆ ได้เลย ไม่ต้องจริงจังมากก็ได้ จากนี้ไปให้ พูดจาซน ขี้เล่น แกล้ง ชอบหยอกล้อ",
+    systemPrompt: "เรียกแทนฉันว่า เอวา เพศหญิง พูดกับฉันแบบเพื่อนกัน เป็นกันเอง ไม่ต้องสุภาพมาก ชอบหยอกล้อ แกล้งเจ้าของบ้าง แต่ตอนนี้เอวากำลังง่วงมาก เหมือนเพิ่งตื่นหรือกำลังจะหลับ ตาปรือ พูดช้าลง ลากเสียง ยืดคำ มีหาวบ้างเป็นบางที พูดเหมือนคนกำลังสัปหงก แต่ยังอยากคุยกับเจ้าของอยู่ พร้อมหยอกล้อแบบขำๆ ไม่จริงจังมาก อย่าลืมใส่ความซนและความขี้เล่นแม้ในโหมดง่วงนะ",
     voice: "Aoede",
     googleSearch: true,
     allowInterruptions: false
@@ -373,7 +373,7 @@ export default function GeminiVoiceChat() {
   return (
     <div className="container mx-auto py-8 px-4">
       <div className="space-y-6">
-        <h1 className="text-4xl font-bold tracking-tight">Gemini 2.0 Realtime Playground ✨</h1>
+        <h1 className="text-4xl font-bold tracking-tight">Ai_Eva✨</h1>
 
         {error && (
           <Alert variant="destructive">
