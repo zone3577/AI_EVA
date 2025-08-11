@@ -9,6 +9,7 @@ from typing import Dict, Optional
 import threading
 import time
 import pytchat
+import websockets
 
 load_dotenv()
 
@@ -133,6 +134,9 @@ connections: Dict[str, GeminiConnection] = {}
 # Track YouTube chat watchers per client
 yt_watchers: Dict[str, Dict[str, Optional[threading.Thread]]] = {}
 
+# Per-client state: last activity and whether YT auto-reply is allowed
+client_states: Dict[str, Dict[str, object]] = {}
+
 @app.websocket("/ws/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_id: str):
     await websocket.accept()
@@ -142,9 +146,62 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
         gemini = GeminiConnection()
         connections[client_id] = gemini
         yt_watchers[client_id] = {"thread": None, "stop": None}
+        client_states[client_id] = {
+            "last_activity": time.time(),
+            "allow_yt_reply": False,
+        }
 
         # Grab the running loop to schedule tasks from threads
         loop = asyncio.get_running_loop()
+
+        # Helper: sanitize text to avoid invalid frames / unsafe payloads
+        def sanitize_for_model(s: str, max_len: int = 500) -> str:
+            try:
+                # Remove control chars except tab and space
+                s = ''.join(ch if (ord(ch) >= 32 or ch in '\t ') else ' ' for ch in s)
+                # Normalize line breaks to spaces
+                s = s.replace('\r', ' ').replace('\n', ' ')
+                # Drop any problematic surrogates
+                s = s.encode('utf-8', 'ignore').decode('utf-8', 'ignore')
+            except Exception:
+                pass
+            s = s.strip()
+            if len(s) > max_len:
+                s = s[:max_len] + '…'
+            return s
+
+        # Helper: safely send text to Gemini; reconnect if connection was closed by server (e.g., 1007 Unsafe prompt)
+        async def safe_send_text(payload: str):
+            try:
+                await gemini.send_text(payload)
+            except websockets.exceptions.ConnectionClosed as e:  # pyright: ignore[reportGeneralTypeIssues]
+                reason = getattr(e, 'reason', '') or ''
+                code = getattr(e, 'code', None)
+                # If unsafe prompt or 1007, do not resend the same payload
+                if code == 1007 or ('Unsafe prompt' in str(reason)):
+                    print(f"Gemini closed on unsafe/invalid payload (code={code}, reason={reason}). Skipping message.")
+                    try:
+                        if websocket.client_state.value != 3:
+                            await websocket.send_json({
+                                "type": "yt_chat_skipped",
+                                "data": {"reason": "unsafe"}
+                            })
+                    except Exception:
+                        pass
+                    # Try to reconnect for subsequent messages
+                    try:
+                        await gemini.connect()
+                    except Exception as e2:
+                        print(f"Gemini reconnect after unsafe failed: {e2}")
+                    return
+                # For other close reasons, try to reconnect and resend once
+                try:
+                    await gemini.connect()
+                    await gemini.send_text(payload)
+                except Exception as e2:
+                    print(f"Gemini send_text failed after reconnect: {e2}")
+            except Exception as e:
+                print(f"Gemini send_text error: {e}")
 
         # Wait for initial configuration
         config_data = await websocket.receive_json()
@@ -157,7 +214,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
         # Initialize Gemini connection
         await gemini.connect()
 
-        # Handle bidirectional communication
+    # Handle bidirectional communication
         async def receive_from_client():
             try:
                 while True:
@@ -187,10 +244,24 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                         msg_type = message_content.get("type")
                         if msg_type == "audio":
                             await gemini.send_audio(message_content["data"])
+                            # Audio frames come continuously; don't use them for idle detection directly
                         elif msg_type == "image":
                             await gemini.send_image(message_content["data"])
                         elif msg_type == "text":
                             await gemini.send_text(message_content["data"])
+                            # Treat explicit text as activity
+                            st = client_states.get(client_id)
+                            if st is not None:
+                                st["last_activity"] = time.time()
+                                st["allow_yt_reply"] = False
+                        elif msg_type == "user_activity":
+                            # Expect { type: 'user_activity', speaking: true/false }
+                            speaking = bool(message_content.get("speaking", False))
+                            if speaking:
+                                st = client_states.get(client_id)
+                                if st is not None:
+                                    st["last_activity"] = time.time()
+                                    st["allow_yt_reply"] = False
                         elif msg_type == "yt_chat_start":
                             # message_content expects { type: 'yt_chat_start', video_id: '...' }
                             video_id = message_content.get("video_id")
@@ -209,14 +280,22 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                                             for c in chat.get().sync_items():
                                                 user = c.author.name
                                                 msg = c.message
-                                                text = f"[YouTube] {user}: {msg}"
-                                                # Forward to Gemini on main loop
+                                                # Sanitize/limit to avoid unsafe payloads
+                                                clean_msg = sanitize_for_model(str(msg))
+                                                text = f"[YouTube] {user}: {clean_msg}"
+                                                # Forward to Gemini only when idle mode allows
                                                 try:
-                                                    asyncio.run_coroutine_threadsafe(
-                                                        gemini.send_text(text), loop
-                                                    )
+                                                    st = client_states.get(client_id)
+                                                    allow = bool(st.get("allow_yt_reply", False)) if st else False
                                                 except Exception:
-                                                    pass
+                                                    allow = False
+                                                if allow:
+                                                    try:
+                                                        asyncio.run_coroutine_threadsafe(
+                                                            safe_send_text(text), loop
+                                                        )
+                                                    except Exception:
+                                                        pass
                                                 # Forward to client UI on main loop
                                                 try:
                                                     if websocket.client_state.value != 3:
@@ -285,7 +364,19 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                         print("WebSocket closed, stopping Gemini receiver")
                         return
 
-                    msg = await gemini.receive()
+                    try:
+                        msg = await gemini.receive()
+                    except websockets.exceptions.ConnectionClosed as e:  # pyright: ignore[reportGeneralTypeIssues]
+                        # Try to reconnect and continue listening
+                        print(f"Gemini connection closed ({e.code} {e.reason}), reconnecting…")
+                        try:
+                            await gemini.connect()
+                            continue
+                        except Exception as e2:
+                            print(f"Gemini reconnect failed: {e2}")
+                            await asyncio.sleep(1)
+                            continue
+
                     response = json.loads(msg)
 
                     # Forward audio data to client
@@ -324,9 +415,25 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 print(f"Error receiving from Gemini: {e}")
 
         # Run both receiving tasks concurrently
+        async def idle_monitor():
+            # Toggle allow_yt_reply after 10s of no user activity
+            try:
+                while True:
+                    st = client_states.get(client_id)
+                    if st is None:
+                        await asyncio.sleep(1)
+                        continue
+                    last = float(st.get("last_activity", time.time()))
+                    idle = (time.time() - last) >= 10.0
+                    st["allow_yt_reply"] = bool(idle)
+                    await asyncio.sleep(1)
+            except asyncio.CancelledError:
+                return
+
         async with asyncio.TaskGroup() as tg:
             tg.create_task(receive_from_client())
             tg.create_task(receive_from_gemini())
+            tg.create_task(idle_monitor())
 
     except Exception as e:
         print(f"WebSocket error: {e}")
@@ -348,6 +455,11 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                 pass
             finally:
                 del yt_watchers[client_id]
+        if client_id in client_states:
+            try:
+                del client_states[client_id]
+            except Exception:
+                pass
 
 if __name__ == "__main__":
     import uvicorn
