@@ -1,0 +1,354 @@
+from fastapi import FastAPI, WebSocket
+from fastapi.middleware.cors import CORSMiddleware
+import asyncio
+import json
+import os
+from dotenv import load_dotenv
+from websockets import connect
+from typing import Dict, Optional
+import threading
+import time
+import pytchat
+
+load_dotenv()
+
+app = FastAPI()
+
+# Add CORS middleware
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, replace with your frontend URL
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+class GeminiConnection:
+    def __init__(self):
+        self.api_key = os.environ.get("GEMINI_API_KEY")
+        self.model = "gemini-2.0-flash-exp"
+        self.uri = (
+            "wss://generativelanguage.googleapis.com/ws/"
+            "google.ai.generativelanguage.v1alpha.GenerativeService.BidiGenerateContent"
+            f"?key={self.api_key}"
+        )
+        self.ws = None
+        self.config = None
+
+    async def connect(self):
+        """Initialize connection to Gemini"""
+        self.ws = await connect(self.uri, additional_headers={"Content-Type": "application/json"})
+        
+        if not self.config:
+            raise ValueError("Configuration must be set before connecting")
+
+        # Send initial setup message with configuration
+        setup_message = {
+            "setup": {
+                "model": f"models/{self.model}",
+                "generation_config": {
+                    "response_modalities": ["AUDIO"],
+                    "speech_config": {
+                        "voice_config": {
+                            "prebuilt_voice_config": {
+                                "voice_name": self.config["voice"]
+                            }
+                        }
+                    }
+                },
+                "system_instruction": {
+                    "parts": [
+                        {
+                            "text": self.config["systemPrompt"]
+                        }
+                    ]
+                }
+            }
+        }
+        await self.ws.send(json.dumps(setup_message))
+        
+        # Wait for setup completion
+        setup_response = await self.ws.recv()
+        return setup_response
+
+    def set_config(self, config):
+        """Set configuration for the connection"""
+        self.config = config
+
+    async def send_audio(self, audio_data: str):
+        """Send audio data to Gemini"""
+        realtime_input_msg = {
+            "realtime_input": {
+                "media_chunks": [
+                    {
+                        "data": audio_data,
+                        "mime_type": "audio/pcm"
+                    }
+                ]
+            }
+        }
+        await self.ws.send(json.dumps(realtime_input_msg))
+
+    async def receive(self):
+        """Receive message from Gemini"""
+        return await self.ws.recv()
+
+    async def close(self):
+        """Close the connection"""
+        if self.ws:
+            await self.ws.close()
+
+    async def send_image(self, image_data: str):
+        """Send image data to Gemini"""
+        image_message = {
+            "realtime_input": {
+                "media_chunks": [
+                    {
+                        "data": image_data,
+                        "mime_type": "image/jpeg"
+                    }
+                ]
+            }
+        }
+        await self.ws.send(json.dumps(image_message))
+
+    async def send_text(self, text: str):
+        """Send text message to Gemini"""
+        text_message = {
+            "client_content": {
+                "turns": [
+                    {
+                        "role": "user",
+                        "parts": [{"text": text}]
+                    }
+                ],
+                "turn_complete": True
+            }
+        }
+        await self.ws.send(json.dumps(text_message))
+
+# Store active connections
+connections: Dict[str, GeminiConnection] = {}
+
+# Track YouTube chat watchers per client
+yt_watchers: Dict[str, Dict[str, Optional[threading.Thread]]] = {}
+
+@app.websocket("/ws/{client_id}")
+async def websocket_endpoint(websocket: WebSocket, client_id: str):
+    await websocket.accept()
+    
+    try:
+        # Create new Gemini connection for this client
+        gemini = GeminiConnection()
+        connections[client_id] = gemini
+        yt_watchers[client_id] = {"thread": None, "stop": None}
+
+        # Grab the running loop to schedule tasks from threads
+        loop = asyncio.get_running_loop()
+
+        # Wait for initial configuration
+        config_data = await websocket.receive_json()
+        if config_data.get("type") != "config":
+            raise ValueError("First message must be configuration")
+
+        # Set the configuration
+        gemini.set_config(config_data.get("config", {}))
+
+        # Initialize Gemini connection
+        await gemini.connect()
+
+        # Handle bidirectional communication
+        async def receive_from_client():
+            try:
+                while True:
+                    try:
+                        # Check if connection is closed
+                        if websocket.client_state.value == 3:  # WebSocket.CLOSED
+                            print("WebSocket connection closed by client")
+                            return
+
+                        message = await websocket.receive()
+
+                        # Check for close message
+                        if message["type"] == "websocket.disconnect":
+                            print("Received disconnect message")
+                            return
+
+                        raw = message.get("text")
+                        if raw is None and message.get("bytes") is not None:
+                            try:
+                                raw = message.get("bytes").decode("utf-8")
+                            except Exception:
+                                raw = "{}"
+                        if raw is None:
+                            raw = "{}"
+                        message_content = json.loads(raw)
+
+                        msg_type = message_content.get("type")
+                        if msg_type == "audio":
+                            await gemini.send_audio(message_content["data"])
+                        elif msg_type == "image":
+                            await gemini.send_image(message_content["data"])
+                        elif msg_type == "text":
+                            await gemini.send_text(message_content["data"])
+                        elif msg_type == "yt_chat_start":
+                            # message_content expects { type: 'yt_chat_start', video_id: '...' }
+                            video_id = message_content.get("video_id")
+                            if not video_id:
+                                await websocket.send_json({"type": "error", "data": "Missing video_id for yt_chat_start"})
+                            else:
+                                # Start watcher in a thread
+                                def run_chat():
+                                    stop_flag = yt_watchers[client_id]["stop"]
+                                    # Disable signal handling in non-main thread
+                                    chat = pytchat.create(video_id=video_id, interruptable=False)
+                                    try:
+                                        while chat.is_alive():
+                                            if stop_flag and stop_flag.is_set():
+                                                break
+                                            for c in chat.get().sync_items():
+                                                user = c.author.name
+                                                msg = c.message
+                                                text = f"[YouTube] {user}: {msg}"
+                                                # Forward to Gemini on main loop
+                                                try:
+                                                    asyncio.run_coroutine_threadsafe(
+                                                        gemini.send_text(text), loop
+                                                    )
+                                                except Exception:
+                                                    pass
+                                                # Forward to client UI on main loop
+                                                try:
+                                                    if websocket.client_state.value != 3:
+                                                        asyncio.run_coroutine_threadsafe(
+                                                            websocket.send_json({
+                                                                "type": "yt_chat",
+                                                                "data": {"user": user, "message": msg}
+                                                            }),
+                                                            loop,
+                                                        )
+                                                except Exception:
+                                                    pass
+                                            # small sleep to avoid tight loop
+                                            time.sleep(0.1)
+                                    finally:
+                                        try:
+                                            chat.terminate()
+                                        except Exception:
+                                            pass
+
+                                # Ensure previous watcher is stopped
+                                prev_thread = yt_watchers[client_id].get("thread")
+                                prev_stop = yt_watchers[client_id].get("stop")
+                                if prev_stop and isinstance(prev_stop, threading.Event):
+                                    prev_stop.set()
+                                if prev_thread and prev_thread.is_alive():
+                                    prev_thread.join(timeout=2)
+
+                                stop_event = threading.Event()
+                                yt_watchers[client_id]["stop"] = stop_event
+                                t = threading.Thread(target=run_chat, daemon=True)
+                                yt_watchers[client_id]["thread"] = t
+                                t.start()
+                                await websocket.send_json({"type": "yt_chat_status", "data": "started"})
+                        elif msg_type == "yt_chat_stop":
+                            prev_thread = yt_watchers[client_id].get("thread")
+                            prev_stop = yt_watchers[client_id].get("stop")
+                            if prev_stop and isinstance(prev_stop, threading.Event):
+                                prev_stop.set()
+                            if prev_thread and prev_thread.is_alive():
+                                prev_thread.join(timeout=2)
+                            yt_watchers[client_id]["thread"] = None
+                            yt_watchers[client_id]["stop"] = None
+                            await websocket.send_json({"type": "yt_chat_status", "data": "stopped"})
+                        else:
+                            print(f"Unknown message type: {msg_type}")
+                    except json.JSONDecodeError as e:
+                        print(f"JSON decode error: {e}")
+                        continue
+                    except KeyError as e:
+                        print(f"Key error in message: {e}")
+                        continue
+                    except Exception as e:
+                        print(f"Error processing client message: {str(e)}")
+                        if "disconnect message" in str(e):
+                            return
+                        continue
+            except Exception as e:
+                print(f"Fatal error in receive_from_client: {str(e)}")
+                return
+
+        async def receive_from_gemini():
+            try:
+                while True:
+                    if websocket.client_state.value == 3:  # WebSocket.CLOSED
+                        print("WebSocket closed, stopping Gemini receiver")
+                        return
+
+                    msg = await gemini.receive()
+                    response = json.loads(msg)
+
+                    # Forward audio data to client
+                    try:
+                        parts = response["serverContent"]["modelTurn"]["parts"]
+                        for p in parts:
+                            # Check connection state before each send
+                            if websocket.client_state.value == 3:
+                                return
+
+                            if "inlineData" in p:
+                                audio_data = p["inlineData"]["data"]
+                                await websocket.send_json({
+                                    "type": "audio",
+                                    "data": audio_data
+                                })
+                            elif "text" in p:
+                                print(f"Received text: {p['text']}")
+                                await websocket.send_json({
+                                    "type": "text",
+                                    "text": p["text"]
+                                })
+                    except KeyError:
+                        pass
+
+                    # Handle turn completion
+                    try:
+                        if response["serverContent"]["turnComplete"]:
+                            await websocket.send_json({
+                                "type": "turn_complete",
+                                "data": True
+                            })
+                    except KeyError:
+                        pass
+            except Exception as e:
+                print(f"Error receiving from Gemini: {e}")
+
+        # Run both receiving tasks concurrently
+        async with asyncio.TaskGroup() as tg:
+            tg.create_task(receive_from_client())
+            tg.create_task(receive_from_gemini())
+
+    except Exception as e:
+        print(f"WebSocket error: {e}")
+    finally:
+        # Cleanup
+        if client_id in connections:
+            await connections[client_id].close()
+            del connections[client_id]
+        # Stop yt watcher if running
+        if client_id in yt_watchers:
+            try:
+                prev_thread = yt_watchers[client_id].get("thread")
+                prev_stop = yt_watchers[client_id].get("stop")
+                if prev_stop and isinstance(prev_stop, threading.Event):
+                    prev_stop.set()
+                if prev_thread and prev_thread.is_alive():
+                    prev_thread.join(timeout=2)
+            except Exception:
+                pass
+            finally:
+                del yt_watchers[client_id]
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
