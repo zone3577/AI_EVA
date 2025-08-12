@@ -23,10 +23,11 @@ export default function GeminiVoiceChat() {
   const [error, setError] = useState<string | null>(null);
   const [text, setText] = useState('');
   const [config, setConfig] = useState<Config>({
-    systemPrompt: "เรียกแทนฉันว่า เอวา เพศหญิง พูดกับฉันแบบเพื่อนกัน เป็นกันเอง ไม่ต้องสุภาพมาก ชอบหยอกล้อ แกล้งเจ้าของบ้าง แต่ตอนนี้เอวากำลังง่วงมาก เหมือนเพิ่งตื่นหรือกำลังจะหลับ ตาปรือ พูดช้าลง ลากเสียง ยืดคำ มีหาวบ้างเป็นบางที พูดเหมือนคนกำลังสัปหงก แต่ยังอยากคุยกับเจ้าของอยู่ พร้อมหยอกล้อแบบขำๆ ไม่จริงจังมาก อย่าลืมใส่ความซนและความขี้เล่นแม้ในโหมดง่วงนะ",
-    voice: "Aoede",
+    systemPrompt:
+      "เรียกแทนฉันว่า เอวา เพศหญิง พูดกับฉันแบบเพื่อนกัน เป็นกันเอง ไม่ต้องสุภาพมาก ชอบหยอกล้อ แกล้งเจ้าของบ้าง แต่ตอนนี้เอวากำลังง่วงมาก เหมือนเพิ่งตื่นหรือกำลังจะหลับ ตาปรือ พูดช้าลง ลากเสียง ยืดคำ มีหาวบ้างเป็นบางที พูดเหมือนคนกำลังสัปหงก แต่ยังอยากคุยกับเจ้าของอยู่ พร้อมหยอกล้อแบบขำๆ ไม่จริงจังมาก อย่าลืมใส่ความซนและความขี้เล่นแม้ในโหมดง่วงนะ",
+    voice: 'Aoede',
     googleSearch: true,
-    allowInterruptions: false
+    allowInterruptions: false,
   });
   const [isConnected, setIsConnected] = useState(false);
   const wsRef = useRef<WebSocket | null>(null);
@@ -48,7 +49,7 @@ export default function GeminiVoiceChat() {
   const [ytChatEnabled, setYtChatEnabled] = useState<boolean>(false);
   const [ytChatLog, setYtChatLog] = useState<string[]>([]);
 
-  const voices = ["Puck", "Charon", "Kore", "Fenrir", "Aoede"];
+  const voices = ['Puck', 'Charon', 'Kore', 'Fenrir', 'Aoede'];
   const audioBufferRef = useRef<Float32Array[]>([]);
   const isPlayingRef = useRef<boolean>(false);
   // For idle detection pings
@@ -56,7 +57,6 @@ export default function GeminiVoiceChat() {
   const lastSpeakingRef = useRef<boolean>(false);
 
   const startStream = async (mode: 'audio' | 'camera' | 'screen') => {
-
     if (mode !== 'audio') {
       setChatMode('video');
     } else {
@@ -66,16 +66,18 @@ export default function GeminiVoiceChat() {
     wsRef.current = new WebSocket(`ws://localhost:8000/ws/${clientId.current}`);
 
     wsRef.current.onopen = async () => {
-      wsRef.current?.send(JSON.stringify({
-        type: 'config',
-        config: config
-      }));
+      wsRef.current?.send(
+        JSON.stringify({
+          type: 'config',
+          config: config,
+        }),
+      );
 
       await startAudioStream();
 
       if (mode !== 'audio') {
         setVideoEnabled(true);
-        setVideoSource(mode)
+        setVideoSource(mode);
       }
 
       setIsStreaming(true);
@@ -89,15 +91,15 @@ export default function GeminiVoiceChat() {
         playAudioData(audioData);
       } else if (response.type === 'text') {
         const incoming = response.text ?? response.data; // backend may send text in either field
-        if (incoming) setText(prev => prev + incoming + '\n');
+        if (incoming) setText((prev) => prev + incoming + '\n');
       } else if (response.type === 'yt_chat') {
         const item = `[YouTube] ${response.data.user}: ${response.data.message}`;
-        setYtChatLog(prev => [...prev, item]);
+        setYtChatLog((prev) => [...prev, item]);
       } else if (response.type === 'yt_chat_status') {
         if (response.data === 'started') setYtChatEnabled(true);
         if (response.data === 'stopped') setYtChatEnabled(false);
       } else if (response.type === 'yt_chat_skipped') {
-        setYtChatLog(prev => [...prev, `[YouTube] (skipped by safety)`]);
+        setYtChatLog((prev) => [...prev, `[YouTube] (skipped by safety)`]);
       }
     };
 
@@ -116,7 +118,7 @@ export default function GeminiVoiceChat() {
     try {
       // Initialize audio context
       audioContextRef.current = new ((window as any).AudioContext || (window as any).webkitAudioContext)({
-        sampleRate: 16000 // Required by Gemini
+        sampleRate: 16000, // Required by Gemini
       });
 
       // Get microphone stream
@@ -132,10 +134,12 @@ export default function GeminiVoiceChat() {
           const pcmData = float32ToPcm16(new Float32Array(inputData));
           // Convert to base64 and send as binary
           const base64Data = btoa(String.fromCharCode(...new Uint8Array(pcmData.buffer)));
-          wsRef.current.send(JSON.stringify({
-            type: 'audio',
-            data: base64Data
-          }));
+          wsRef.current.send(
+            JSON.stringify({
+              type: 'audio',
+              data: base64Data,
+            }),
+          );
 
           // Lightweight voice activity detection (RMS-based) to inform server about speaking state
           let sumSq = 0;
@@ -173,7 +177,7 @@ export default function GeminiVoiceChat() {
       const { source, processor, stream } = audioInputRef.current;
       source.disconnect();
       processor.disconnect();
-      stream.getTracks().forEach(track => track.stop());
+      stream.getTracks().forEach((track) => track.stop());
       audioInputRef.current = null;
     }
 
@@ -182,7 +186,7 @@ export default function GeminiVoiceChat() {
       setVideoSource(null);
 
       if (videoStreamRef.current) {
-        videoStreamRef.current.getTracks().forEach(track => track.stop());
+        videoStreamRef.current.getTracks().forEach((track) => track.stop());
         videoStreamRef.current = null;
       }
       if (videoIntervalRef.current) {
