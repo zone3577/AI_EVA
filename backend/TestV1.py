@@ -149,6 +149,10 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
         client_states[client_id] = {
             "last_activity": time.time(),
             "allow_yt_reply": False,
+            "mode": "audio",            # 'audio' | 'camera' | 'screen'
+            "last_image": 0.0,            # timestamp of last image frame
+            "last_yt_chat": 0.0,          # timestamp of last received yt chat line
+            "last_proactive": 0.0,        # cooldown for proactive prompts
         }
 
         # Grab the running loop to schedule tasks from threads
@@ -247,6 +251,9 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                             # Audio frames come continuously; don't use them for idle detection directly
                         elif msg_type == "image":
                             await gemini.send_image(message_content["data"])
+                            st = client_states.get(client_id)
+                            if st is not None:
+                                st["last_image"] = time.time()
                         elif msg_type == "text":
                             await gemini.send_text(message_content["data"])
                             # Treat explicit text as activity
@@ -254,6 +261,13 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                             if st is not None:
                                 st["last_activity"] = time.time()
                                 st["allow_yt_reply"] = False
+                        elif msg_type == "mode":
+                            # Expect { type: 'mode', mode: 'audio'|'camera'|'screen' }
+                            m = message_content.get("mode")
+                            if m in ("audio", "camera", "screen"):
+                                st = client_states.get(client_id)
+                                if st is not None:
+                                    st["mode"] = m
                         elif msg_type == "user_activity":
                             # Expect { type: 'user_activity', speaking: true/false }
                             speaking = bool(message_content.get("speaking", False))
@@ -283,6 +297,13 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                                                 # Sanitize/limit to avoid unsafe payloads
                                                 clean_msg = sanitize_for_model(str(msg))
                                                 text = f"[YouTube] {user}: {clean_msg}"
+                                                # Update last yt chat time
+                                                try:
+                                                    st = client_states.get(client_id)
+                                                    if st is not None:
+                                                        st["last_yt_chat"] = time.time()
+                                                except Exception:
+                                                    pass
                                                 # Forward to Gemini only when idle mode allows
                                                 try:
                                                     st = client_states.get(client_id)
@@ -430,10 +451,44 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
             except asyncio.CancelledError:
                 return
 
+        async def proactive_monitor():
+            # When idle, in screen mode, recent image, and no yt chat, occasionally prompt small talk about the screen
+            try:
+                while True:
+                    st = client_states.get(client_id)
+                    if st is None:
+                        await asyncio.sleep(1)
+                        continue
+                    now = time.time()
+                    mode = st.get("mode", "audio")
+                    idle = bool(st.get("allow_yt_reply", False))
+                    last_img = float(st.get("last_image", 0.0))
+                    last_chat = float(st.get("last_yt_chat", 0.0))
+                    last_pro = float(st.get("last_proactive", 0.0))
+
+                    screen_active = (mode == "screen") and (now - last_img <= 5.0)
+                    chat_quiet = (now - last_chat >= 20.0)
+                    cooldown_over = (now - last_pro >= 30.0)
+
+                    if idle and screen_active and chat_quiet and cooldown_over:
+                        prompt = (
+                            "จากภาพหน้าจอปัจจุบัน ชวนคุยด้วยประโยคสั้นๆ 1-2 ประโยคเกี่ยวกับสิ่งที่ผู้ใช้กำลังทำอยู่ "
+                            "ให้เป็นกันเองแบบเพื่อน พูดสั้น กระชับ และสุภาพน้อยลงเล็กน้อยตามโทนบทบาทเดิม"
+                        )
+                        try:
+                            await safe_send_text(prompt)
+                            st["last_proactive"] = now
+                        except Exception as e:
+                            print(f"proactive_monitor send error: {e}")
+                    await asyncio.sleep(2)
+            except asyncio.CancelledError:
+                return
+
         async with asyncio.TaskGroup() as tg:
             tg.create_task(receive_from_client())
             tg.create_task(receive_from_gemini())
             tg.create_task(idle_monitor())
+            tg.create_task(proactive_monitor())
 
     except Exception as e:
         print(f"WebSocket error: {e}")

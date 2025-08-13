@@ -65,7 +65,7 @@ export default function GeminiVoiceChat() {
 
     wsRef.current = new WebSocket(`ws://localhost:8000/ws/${clientId.current}`);
 
-    wsRef.current.onopen = async () => {
+  wsRef.current.onopen = async () => {
       wsRef.current?.send(
         JSON.stringify({
           type: 'config',
@@ -75,10 +75,13 @@ export default function GeminiVoiceChat() {
 
       await startAudioStream();
 
-      if (mode !== 'audio') {
+  if (mode !== 'audio') {
         setVideoEnabled(true);
         setVideoSource(mode);
       }
+
+  // Inform backend of current mode for proactive behavior
+  wsRef.current?.send(JSON.stringify({ type: 'mode', mode: mode }));
 
       setIsStreaming(true);
       setIsConnected(true);
@@ -319,11 +322,18 @@ export default function GeminiVoiceChat() {
   // Toggle video function
   const toggleVideo = () => {
     setVideoEnabled(!videoEnabled);
+    // Update mode when toggling video off -> back to audio
+    if (wsRef.current) {
+      wsRef.current.send(JSON.stringify({ type: 'mode', mode: !videoEnabled ? (videoSource ?? 'camera') : 'audio' }));
+    }
   };
 
   const stopVideo = () => {
     setVideoEnabled(false);
     setVideoSource(null);
+    if (wsRef.current) {
+      wsRef.current.send(JSON.stringify({ type: 'mode', mode: 'audio' }));
+    }
     if (videoStreamRef.current) {
       videoStreamRef.current.getTracks().forEach(t => t.stop());
       videoStreamRef.current = null;
