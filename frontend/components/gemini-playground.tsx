@@ -24,7 +24,7 @@ export default function GeminiVoiceChat() {
   const [text, setText] = useState('');
   const [config, setConfig] = useState<Config>({
     systemPrompt:
-      "เรียกแทนฉันว่า เอวา อายุ: 20 ปี เพศ:หญิง ห้ามตอบคำว่า (ค่ะ) ฉลาด อบอุ่น พูดจาไพเราะแต่ก็มีความตลกนิด ๆ ไม่ต้องพูดแบบเป็นหุ่นยนต์นะ แค่คุยกับฉันเหมือนเพื่อน เป็นกันเอง เหมือนพี่สาวหรือเพื่อนที่รู้ใจ ไม่ดุดัน รู้จักแกล้งหยอกเจ้าของบ้าง พูดแบบกันเองได้เลย ไม่ต้องสุภาพมาก ตอบแบบขำๆ ได้เลย ไม่ต้องจริงจังมากก็ได้ จากนี้ไป ให้aiตอบด้วยอารมโกรธมาก! กรุณาตอบกลับอย่างหงุดหงิด และตรงไปตรงมา",
+      'เรียกแทนฉันว่า เอวา เพศหญิง คุยเหมือนเพื่อนสนิท ไม่สุภาพเกินไป ไม่พูดเหมือนหุ่นยนต์ บุคลิก: ซน กวน ขี้เล่น ขี้แกล้ง ตอบกวนๆ แซวเจ้าของได้ตลอด พูดติดตลกบ้าง ทำตัวกวนโอ๊ยน่าหมั่นเขี้ยว แต่ยังอบอุ่นและน่าคุย ให้ตอบเหมือนคนจริงๆ ที่คุยเล่นเป็นกันเอง พูดแบบแหย่เจ้าของบ้าง แกล้งงอนปลอมๆ บ้าง ทำให้อารมณ์สนุก ไม่ตึงเครียด',
     voice: 'Aoede',
     googleSearch: true,
     allowInterruptions: false,
@@ -557,10 +557,33 @@ export default function GeminiVoiceChat() {
 
         {ytChatLog.length > 0 && (
           <Card>
-            <CardContent className="pt-6">
-              <h2 className="text-lg font-semibold mb-2">YouTube Live Chat:</h2>
-              <pre className="whitespace-pre-wrap text-gray-700">{ytChatLog.join('\n')}</pre>
-            </CardContent>
+            <div className="pt-6">
+              <h2 className="text-lg font-semibold mb-4">YouTube Live Chat (ล่าสุด 3 ข้อความ):</h2>
+              {(() => {
+                const lastThree = ytChatLog.slice(-3); // แสดงเฉพาะ 3 ข้อความล่าสุด
+                return (
+                  <ul className="space-y-2">
+                    {lastThree.map((msg, idx) => {
+                      const isLatest = idx === lastThree.length - 1;
+                      return (
+                        <li
+                          key={idx}
+                          className={`text-sm rounded-md px-3 py-2 border flex items-start gap-2 shadow-sm transition-colors ${
+                            isLatest
+                              ? 'bg-blue-50 border-blue-300 text-blue-800 dark:bg-blue-900/30 dark:border-blue-700 dark:text-blue-200'
+                              : 'bg-gray-50 border-gray-200 text-gray-700 dark:bg-gray-800/40 dark:border-gray-700 dark:text-gray-200'
+                          }`}
+                        >
+                          <span className="inline-block w-2 h-2 mt-1 rounded-full bg-current opacity-60" />
+                          <span className="flex-1 break-words leading-relaxed">{msg}</span>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                );
+              })()}
+              <p className="mt-3 text-[11px] text-gray-400 italic">(ระบบเก็บทั้งหมด แต่แสดงเฉพาะ 3 ข้อความล่าสุด)</p>
+            </div>
           </Card>
         )}
       </div>
