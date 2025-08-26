@@ -2,6 +2,11 @@
 @tailwind components;
 @tailwind utilities;
 
+/* Subtle background gradient */
+body {
+  @apply bg-gradient-to-br from-gray-50 to-white;
+}
+
 body {
   font-family: Arial, Helvetica, sans-serif;
 }

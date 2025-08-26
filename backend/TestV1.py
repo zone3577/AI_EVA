@@ -361,6 +361,13 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                             yt_watchers[client_id]["thread"] = None
                             yt_watchers[client_id]["stop"] = None
                             await websocket.send_json({"type": "yt_chat_status", "data": "stopped"})
+                        elif msg_type == "ping":
+                            # simple pong for latency measurement
+                            ts = message_content.get("ts")
+                            try:
+                                await websocket.send_json({"type": "pong", "ts": ts})
+                            except Exception:
+                                pass
                         else:
                             print(f"Unknown message type: {msg_type}")
                     except json.JSONDecodeError as e:

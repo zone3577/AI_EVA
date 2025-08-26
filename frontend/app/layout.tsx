@@ -14,7 +14,7 @@ const geistMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Ai_Eva",
-  description: "Realtime Ai_Eva",
+  description: "Realtime Ai_Eva - Voice & Video Assistant",
 };
 
 export default function RootLayout({
