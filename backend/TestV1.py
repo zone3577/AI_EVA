@@ -88,11 +88,11 @@ class GeminiConnection:
                 ]
             }
         }
-        await self.ws.send(json.dumps(realtime_input_msg))
+        await self.ws.send(json.dumps(realtime_input_msg)) # type: ignore
 
     async def receive(self):
         """Receive message from Gemini"""
-        return await self.ws.recv()
+        return await self.ws.recv() # type: ignore
 
     async def close(self):
         """Close the connection"""
@@ -111,7 +111,7 @@ class GeminiConnection:
                 ]
             }
         }
-        await self.ws.send(json.dumps(image_message))
+        await self.ws.send(json.dumps(image_message)) # type: ignore
 
     async def send_text(self, text: str):
         """Send text message to Gemini"""
@@ -126,7 +126,7 @@ class GeminiConnection:
                 "turn_complete": True
             }
         }
-        await self.ws.send(json.dumps(text_message))
+        await self.ws.send(json.dumps(text_message)) # type: ignore
 
 # Store active connections
 connections: Dict[str, GeminiConnection] = {}
@@ -238,7 +238,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                         raw = message.get("text")
                         if raw is None and message.get("bytes") is not None:
                             try:
-                                raw = message.get("bytes").decode("utf-8")
+                                raw = message.get("bytes").decode("utf-8") # pyright: ignore[reportOptionalMemberAccess]
                             except Exception:
                                 raw = "{}"
                         if raw is None:
@@ -289,9 +289,9 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                                     chat = pytchat.create(video_id=video_id, interruptable=False)
                                     try:
                                         while chat.is_alive():
-                                            if stop_flag and stop_flag.is_set():
+                                            if stop_flag and stop_flag.is_set(): # type: ignore
                                                 break
-                                            for c in chat.get().sync_items():
+                                            for c in chat.get().sync_items(): # type: ignore
                                                 user = c.author.name
                                                 msg = c.message
                                                 # Sanitize/limit to avoid unsafe payloads
@@ -346,7 +346,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                                     prev_thread.join(timeout=2)
 
                                 stop_event = threading.Event()
-                                yt_watchers[client_id]["stop"] = stop_event
+                                yt_watchers[client_id]["stop"] = stop_event # type: ignore
                                 t = threading.Thread(target=run_chat, daemon=True)
                                 yt_watchers[client_id]["thread"] = t
                                 t.start()
@@ -451,7 +451,7 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                     if st is None:
                         await asyncio.sleep(1)
                         continue
-                    last = float(st.get("last_activity", time.time()))
+                    last = float(st.get("last_activity", time.time())) # type: ignore
                     idle = (time.time() - last) >= 10.0
                     st["allow_yt_reply"] = bool(idle)
                     await asyncio.sleep(1)
@@ -469,9 +469,9 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
                     now = time.time()
                     mode = st.get("mode", "audio")
                     idle = bool(st.get("allow_yt_reply", False))
-                    last_img = float(st.get("last_image", 0.0))
-                    last_chat = float(st.get("last_yt_chat", 0.0))
-                    last_pro = float(st.get("last_proactive", 0.0))
+                    last_img = float(st.get("last_image", 0.0)) # type: ignore
+                    last_chat = float(st.get("last_yt_chat", 0.0)) # type: ignore
+                    last_pro = float(st.get("last_proactive", 0.0)) # type: ignore
 
                     screen_active = (mode == "screen") and (now - last_img <= 5.0)
                     chat_quiet = (now - last_chat >= 20.0)
