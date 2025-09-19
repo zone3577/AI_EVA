@@ -1,8 +1,8 @@
 # Project Overview
 - Framework: Next.js 14 (App Router)
-- Database: Supabase (Postgres + Auth)
-- Styling: TailwindCSS + shadcn/ui
-- Purpose: Online Learning Management System (LMS)
+- backend: /backend
+- Styling: TailwindCSS
+- Purpose: AI E_VA + หน้าเว็บ AI
 
 # AI Instructions
 คุณเป็นนักพัฒนา Next.js และ Supabase ผู้เชี่ยวชาญที่ทำงานในโปรเจกต์ของฉัน
