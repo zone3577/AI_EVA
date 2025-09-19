@@ -3,6 +3,7 @@ from fastapi.middleware.cors import CORSMiddleware
 import asyncio
 import json
 import os
+import logging
 from dotenv import load_dotenv
 from websockets import connect
 from typing import Dict, Optional
@@ -13,20 +14,37 @@ import websockets
 
 load_dotenv()
 
-app = FastAPI()
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
 
-# Add CORS middleware
+# Validate environment variables
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY")
+if not GEMINI_API_KEY:
+    logger.error("GEMINI_API_KEY environment variable is required")
+    raise ValueError("GEMINI_API_KEY environment variable is required")
+
+# Environment settings
+FRONTEND_URL = os.environ.get("FRONTEND_URL", "http://localhost:3000")
+DEBUG_MODE = os.environ.get("DEBUG", "false").lower() == "true"
+
+app = FastAPI(title="AI Eva Backend", version="1.0.0", debug=DEBUG_MODE)
+
+# Add CORS middleware with secure configuration
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],  # In production, replace with your frontend URL
+    allow_origins=[FRONTEND_URL] if not DEBUG_MODE else ["http://localhost:3000", "http://127.0.0.1:3000"],
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST"],
     allow_headers=["*"],
 )
 
 class GeminiConnection:
     def __init__(self):
-        self.api_key = os.environ.get("GEMINI_API_KEY")
+        self.api_key = GEMINI_API_KEY
         self.model = "gemini-2.0-flash-exp"
         self.uri = (
             "wss://generativelanguage.googleapis.com/ws/"
@@ -35,6 +53,7 @@ class GeminiConnection:
         )
         self.ws = None
         self.config = None
+        logger.info("GeminiConnection initialized")
 
     async def connect(self):
         """Initialize connection to Gemini"""
@@ -139,10 +158,12 @@ client_states: Dict[str, Dict[str, object]] = {}
 
 @app.websocket("/ws/{client_id}")
 async def websocket_endpoint(websocket: WebSocket, client_id: str):
+    logger.info(f"New WebSocket connection attempt for client: {client_id}")
     await websocket.accept()
     
     try:
         # Create new Gemini connection for this client
+        logger.info(f"Creating Gemini connection for client: {client_id}")
         gemini = GeminiConnection()
         connections[client_id] = gemini
         yt_watchers[client_id] = {"thread": None, "stop": None}
@@ -178,34 +199,38 @@ async def websocket_endpoint(websocket: WebSocket, client_id: str):
         async def safe_send_text(payload: str):
             try:
                 await gemini.send_text(payload)
+                logger.debug(f"Sent text to Gemini for client {client_id}: {payload[:50]}...")
             except websockets.exceptions.ConnectionClosed as e:  # pyright: ignore[reportGeneralTypeIssues]
                 reason = getattr(e, 'reason', '') or ''
                 code = getattr(e, 'code', None)
+                logger.warning(f"Gemini connection closed for client {client_id}: code={code}, reason={reason}")
                 # If unsafe prompt or 1007, do not resend the same payload
                 if code == 1007 or ('Unsafe prompt' in str(reason)):
-                    print(f"Gemini closed on unsafe/invalid payload (code={code}, reason={reason}). Skipping message.")
+                    logger.warning(f"Unsafe prompt detected for client {client_id}. Skipping message.")
                     try:
                         if websocket.client_state.value != 3:
                             await websocket.send_json({
                                 "type": "yt_chat_skipped",
                                 "data": {"reason": "unsafe"}
                             })
-                    except Exception:
-                        pass
+                    except Exception as send_error:
+                        logger.error(f"Failed to send unsafe prompt notification: {send_error}")
                     # Try to reconnect for subsequent messages
                     try:
                         await gemini.connect()
-                    except Exception as e2:
-                        print(f"Gemini reconnect after unsafe failed: {e2}")
+                        logger.info(f"Reconnected to Gemini after unsafe prompt for client {client_id}")
+                    except Exception as reconnect_error:
+                        logger.error(f"Gemini reconnect after unsafe failed for client {client_id}: {reconnect_error}")
                     return
                 # For other close reasons, try to reconnect and resend once
                 try:
                     await gemini.connect()
                     await gemini.send_text(payload)
-                except Exception as e2:
-                    print(f"Gemini send_text failed after reconnect: {e2}")
+                    logger.info(f"Reconnected and resent message for client {client_id}")
+                except Exception as retry_error:
+                    logger.error(f"Gemini send_text failed after reconnect for client {client_id}: {retry_error}")
             except Exception as e:
-                print(f"Gemini send_text error: {e}")
+                logger.error(f"Gemini send_text error for client {client_id}: {e}")
 
         # Wait for initial configuration
         config_data = await websocket.receive_json()
